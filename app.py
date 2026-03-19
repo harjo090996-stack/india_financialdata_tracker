@@ -110,10 +110,10 @@ def format_financials_to_crores(dataframe):
     return df_copy
 
 # --- 3. STREAMLIT UI ---
-st.set_page_config(layout="wide", page_title="India Finviz Clone")
+st.set_page_config(layout="wide", page_title="India Market Data Tracker")
 
 macro = get_rbi_macro()
-st.title("📈 India Market Finviz")
+st.title("The India Story")
 m1, m2, m3 = st.columns(3)
 m1.metric("RBI Repo Rate", macro["Repo Rate"])
 m2.metric("RBI CRR", macro["CRR"])
