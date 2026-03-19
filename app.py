@@ -149,40 +149,66 @@ m3.metric("Market", "NSE (India)")
 st.sidebar.header("Configuration")
 # Use NIFTY 100 companies by default
 nifty_100 = get_nifty_100()
-tickers = nifty_100
+
+# Allow users to add additional tickers beyond NIFTY 100
+additional_tickers_input = st.sidebar.text_area("Add Additional Tickers (comma-separated)", placeholder="e.g., LTIMINDTREE.NS, ASTERDM.NS")
+additional_tickers = [t.strip() for t in additional_tickers_input.split(",") if t.strip()]
+
+# Combine NIFTY 100 with additional tickers
+screener_tickers = nifty_100 + additional_tickers
+# Remove duplicates while preserving order
+screener_tickers = list(dict.fromkeys(screener_tickers))
 
 min_roe = st.sidebar.slider("Min ROE (%)", 0, 40, 10)
 rsi_limit = st.sidebar.slider("Max RSI", 30, 90, 70)
 
-if tickers:
-    with st.spinner('Analyzing...'):
-        df = fetch_comprehensive_data(tickers)
+if screener_tickers:
+    # Always fetch NIFTY 100 data for heatmap (independent of filters)
+    with st.spinner('Fetching NIFTY 100 data for heatmap...'):
+        nifty_heatmap_df = fetch_comprehensive_data(nifty_100)
+    
+    # Fetch screener data (NIFTY 100 + additional tickers)
+    with st.spinner('Analyzing screener data...'):
+        screener_df = fetch_comprehensive_data(screener_tickers)
 
-    if not df.empty:
-        st.subheader("Market Heatmap")
-        fig = px.treemap(df, path=['Sector', 'Ticker'], values='Market Cap (Cr)',
+    # Display Heatmap (Always NIFTY 100, independent of filters)
+    if not nifty_heatmap_df.empty:
+        st.subheader("Market Heatmap (NIFTY 100)")
+        fig = px.treemap(nifty_heatmap_df, path=['Sector', 'Ticker'], values='Market Cap (Cr)',
                          color='Change %', color_continuous_scale='RdYlGn', color_continuous_midpoint=0)
         st.plotly_chart(fig, use_container_width=True)
 
         st.divider()
         st.subheader("Integrated Screener")
         # Filtering with safety checks
-        filtered_df = df[(df['ROE (%)'] >= min_roe) & (df['RSI (14)'] <= rsi_limit)].reset_index(drop=True)
+        filtered_df = screener_df[(screener_df['ROE (%)'] >= min_roe) & (screener_df['RSI (14)'] <= rsi_limit)].reset_index(drop=True)
         
         if not filtered_df.empty:
             # Show first 10 companies by default
             initial_display_count = min(10, len(filtered_df))
             
-            # Multiselect to add more companies
+            # Multiselect to add more companies with minimum 5 enforcement
             all_available_tickers = filtered_df['Ticker'].tolist()
             default_tickers = filtered_df['Ticker'].head(initial_display_count).tolist()
             
             selected_tickers = st.multiselect(
-                "Select companies to display (showing first 10 by default):",
+                "Select companies to display (minimum 5 required):",
                 options=all_available_tickers,
                 default=default_tickers,
                 key="screener_select"
             )
+            
+            # Enforce minimum 5 selections
+            if len(selected_tickers) < 5:
+                st.warning(f"⚠️ Please select at least 5 companies. Currently selected: {len(selected_tickers)}")
+                # Auto-select minimum 5 if not enough selected
+                if len(selected_tickers) > 0 and len(selected_tickers) < 5:
+                    min_required = 5 - len(selected_tickers)
+                    remaining = [t for t in all_available_tickers if t not in selected_tickers]
+                    selected_tickers.extend(remaining[:min_required])
+                    st.info(f"Auto-selected {min_required} more companies to meet minimum requirement.")
+                else:
+                    selected_tickers = all_available_tickers[:5]
             
             if selected_tickers:
                 display_df = filtered_df[filtered_df['Ticker'].isin(selected_tickers)]
@@ -192,30 +218,92 @@ if tickers:
         else:
             st.info("No stocks match the current filters.")
     else:
-        st.warning("Could not retrieve data. Please check ticker symbols.")
+        st.warning("Could not retrieve NIFTY 100 data. Please check ticker symbols.")
 
     st.divider()
-    selected_stock = st.selectbox("Company Deep Dive", tickers)
-    if selected_stock:
-        s_obj = yf.Ticker(selected_stock)
+    st.subheader("Company Deep Dive")
+    
+    # View mode selection
+    view_mode = st.radio("Select View Mode:", ["Single View", "Compare"], horizontal=True)
+    
+    if view_mode == "Single View":
+        selected_stock = st.selectbox("Select a company", screener_tickers, key="single_view_select")
+        if selected_stock:
+            s_obj = yf.Ticker(selected_stock)
+            
+            # Get financial statements and format to Crores
+            income_stmt = s_obj.income_stmt
+            balance_sheet = s_obj.balance_sheet
+            cash_flow = s_obj.cashflow
+            
+            # Format data to Crores
+            income_stmt_cr = format_financials_to_crores(income_stmt)
+            balance_sheet_cr = format_financials_to_crores(balance_sheet)
+            cash_flow_cr = format_financials_to_crores(cash_flow)
+            
+            t1, t2, t3 = st.tabs(["Income Statement", "Balance Sheet", "Cash Flow"])
+            with t1: 
+                st.caption("Values in Crores (₹)")
+                st.dataframe(income_stmt_cr)
+            with t2: 
+                st.caption("Values in Crores (₹)")
+                st.dataframe(balance_sheet_cr)
+            with t3:
+                st.caption("Values in Crores (₹)")
+                st.dataframe(cash_flow_cr)
+    
+    else:  # Compare mode
+        col1, col2 = st.columns(2)
         
-        # Get financial statements and format to Crores
-        income_stmt = s_obj.income_stmt
-        balance_sheet = s_obj.balance_sheet
-        cash_flow = s_obj.cashflow
+        with col1:
+            stock1 = st.selectbox("Select first company", screener_tickers, key="stock1_select")
         
-        # Format data to Crores
-        income_stmt_cr = format_financials_to_crores(income_stmt)
-        balance_sheet_cr = format_financials_to_crores(balance_sheet)
-        cash_flow_cr = format_financials_to_crores(cash_flow)
+        with col2:
+            stock2 = st.selectbox("Select second company", screener_tickers, index=min(1, len(screener_tickers)-1), key="stock2_select")
         
-        t1, t2, t3 = st.tabs(["Income Statement", "Balance Sheet", "Cash Flow"])
-        with t1: 
-            st.caption("Values in Crores (₹)")
-            st.dataframe(income_stmt_cr)
-        with t2: 
-            st.caption("Values in Crores (₹)")
-            st.dataframe(balance_sheet_cr)
-        with t3:
-            st.caption("Values in Crores (₹)")
-            st.dataframe(cash_flow_cr)
+        if stock1 and stock2:
+            # Fetch data for both stocks
+            s_obj1 = yf.Ticker(stock1)
+            s_obj2 = yf.Ticker(stock2)
+            
+            # Get financial statements
+            income_stmt1 = format_financials_to_crores(s_obj1.income_stmt)
+            balance_sheet1 = format_financials_to_crores(s_obj1.balance_sheet)
+            cash_flow1 = format_financials_to_crores(s_obj1.cashflow)
+            
+            income_stmt2 = format_financials_to_crores(s_obj2.income_stmt)
+            balance_sheet2 = format_financials_to_crores(s_obj2.balance_sheet)
+            cash_flow2 = format_financials_to_crores(s_obj2.cashflow)
+            
+            # Display comparison
+            t1, t2, t3 = st.tabs(["Income Statement", "Balance Sheet", "Cash Flow"])
+            
+            with t1:
+                st.caption("Values in Crores (₹)")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**{stock1}**")
+                    st.dataframe(income_stmt1)
+                with col2:
+                    st.write(f"**{stock2}**")
+                    st.dataframe(income_stmt2)
+            
+            with t2:
+                st.caption("Values in Crores (₹)")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**{stock1}**")
+                    st.dataframe(balance_sheet1)
+                with col2:
+                    st.write(f"**{stock2}**")
+                    st.dataframe(balance_sheet2)
+            
+            with t3:
+                st.caption("Values in Crores (₹)")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**{stock1}**")
+                    st.dataframe(cash_flow1)
+                with col2:
+                    st.write(f"**{stock2}**")
+                    st.dataframe(cash_flow2)
