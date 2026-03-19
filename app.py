@@ -6,6 +6,33 @@ import requests
 from bs4 import BeautifulSoup
 import numpy as np
 
+# --- 0. NIFTY 100 LIST ---
+def get_nifty_100():
+    """Returns NIFTY 100 companies list"""
+    nifty_100 = [
+        "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS",
+        "HINDUNILVR.NS", "SBIN.NS", "BHARTIARTL.NS", "ITC.NS", "LT.NS",
+        "ASIANPAINT.NS", "MARUTI.NS", "HDFC.NS", "BAJAJFINSV.NS", "WIPRO.NS",
+        "AXISBANK.NS", "SUNPHARMA.NS", "DMARUTI.NS", "ADANIPORTS.NS", "BAJAJ-AUTO.NS",
+        "TECHM.NS", "JSWSTEEL.NS", "TATA.NS", "KOTAKBANK.NS", "HCLTECH.NS",
+        "TITAN.NS", "NTPC.NS", "POWERGRID.NS", "COALINDIA.NS", "UPL.NS",
+        "GAIL.NS", "IOC.NS", "BPCL.NS", "INDIGO.NS", "LUPIN.NS",
+        "DIVISLAB.NS", "CIPLA.NS", "EICHERMOT.NS", "NESTLEIND.NS", "M&M.NS",
+        "HEROMOTOCO.NS", "TATAMOTORS.NS", "TATASTEEL.NS", "BANKINDIA.NS", "CENTRALBK.NS",
+        "INDUSIND.NS", "ABCAPITAL.NS", "ABBOTINDIA.NS", "AUROPHARMA.NS", "CADILAHC.NS",
+        "COLPAL.NS", "CONCOR.NS", "CUMMINSIND.NS", "DRREDDY.NS", "ESCORTS.NS",
+        "EXIDEIND.NS", "FEDERALBNK.NS", "GICRE.NS", "GODREJCP.NS", "GODREJPROP.NS",
+        "GRAPHITE.NS", "GRINDWELL.NS", "GSECL.NS", "HAVELLS.NS", "HDFCAMC.NS",
+        "HEXAWARE.NS", "HINDALCO.NS", "HINDPETRO.NS", "HINDUNILVR.NS", "HONEYWELL.NS",
+        "ICIL.NS", "IDBI.NS", "IDEA.NS", "IDFCFIRSTB.NS", "IFBIND.NS",
+        "IGAZPSU.NS", "INDIAMART.NS", "INDIANB.NS", "INDIGO.NS", "INDUSTOWER.NS",
+        "IRB.NS", "JBCHEPHARM.NS", "JINDALSTEL.NS", "JSLHISSAR.NS", "JSWENERGY.NS",
+        "JSWINFRA.NS", "KAJARIACER.NS", "MAHSEAMLESS.NS", "MANAPPURAM.NS", "MGL.NS",
+        "MINDTREE.NS", "MRPL.NS", "MUTHOOTFIN.NS", "NATIONALUM.NS", "NYKAA.NS",
+        "OBEROIRLTY.NS", "ONGC.NS", "PEL.NS", "PETRONET.NS", "PIDILITIND.NS"
+    ]
+    return nifty_100
+
 # --- 1. RBI MACRO SCRAPER ---
 def get_rbi_macro():
     """Scrapes latest Policy Rates from RBI's main data page"""
@@ -83,6 +110,32 @@ def fetch_comprehensive_data(ticker_list):
             
     return pd.DataFrame(results, columns=cols)
 
+def format_financials_to_crores(dataframe):
+    """Convert financial statement values to Crores (divide by 10^7).
+    Maintains columns that are ratios or small numbers unchanged."""
+    df_copy = dataframe.copy()
+    
+    # List of columns that should NOT be divided (ratios, percentages, etc.)
+    exclude_columns = ['EPS', 'Ratio', 'Margin', 'Growth', 'Return', 'Yield']
+    
+    for col in df_copy.columns:
+        # Check if column should be excluded based on name
+        should_exclude = any(exclude_term in str(col).lower() for exclude_term in exclude_columns)
+        
+        if not should_exclude:
+            try:
+                # Attempt to convert to numeric and divide by 10^7 for values > 1 million
+                df_copy[col] = pd.to_numeric(df_copy[col], errors='coerce')
+                # Only convert columns with large numbers (likely in base currency)
+                if (df_copy[col].abs().max() > 1_000_000) or (df_copy[col].notna().sum() > 0 and 
+                    df_copy[col].abs().max() > 100_000):
+                    df_copy[col] = df_copy[col] / 1e7
+                    df_copy[col] = df_copy[col].round(2)
+            except:
+                pass
+    
+    return df_copy
+
 # --- 3. STREAMLIT UI ---
 st.set_page_config(layout="wide", page_title="India Finviz Clone")
 
@@ -94,8 +147,9 @@ m2.metric("RBI CRR", macro["CRR"])
 m3.metric("Market", "NSE (India)")
 
 st.sidebar.header("Configuration")
-ticker_input = st.sidebar.text_area("Tickers (NSE)", "RELIANCE.NS, TCS.NS, HDFCBANK.NS, INFY.NS")
-tickers = [t.strip() for t in ticker_input.split(",") if t.strip()]
+# Use NIFTY 100 companies by default
+nifty_100 = get_nifty_100()
+tickers = nifty_100
 
 min_roe = st.sidebar.slider("Min ROE (%)", 0, 40, 10)
 rsi_limit = st.sidebar.slider("Max RSI", 30, 90, 70)
@@ -113,9 +167,28 @@ if tickers:
         st.divider()
         st.subheader("Integrated Screener")
         # Filtering with safety checks
-        filtered_df = df[(df['ROE (%)'] >= min_roe) & (df['RSI (14)'] <= rsi_limit)]
+        filtered_df = df[(df['ROE (%)'] >= min_roe) & (df['RSI (14)'] <= rsi_limit)].reset_index(drop=True)
+        
         if not filtered_df.empty:
-            st.dataframe(filtered_df.style.background_gradient(subset=['Change %', 'ROE (%)'], cmap='RdYlGn'))
+            # Show first 10 companies by default
+            initial_display_count = min(10, len(filtered_df))
+            
+            # Multiselect to add more companies
+            all_available_tickers = filtered_df['Ticker'].tolist()
+            default_tickers = filtered_df['Ticker'].head(initial_display_count).tolist()
+            
+            selected_tickers = st.multiselect(
+                "Select companies to display (showing first 10 by default):",
+                options=all_available_tickers,
+                default=default_tickers,
+                key="screener_select"
+            )
+            
+            if selected_tickers:
+                display_df = filtered_df[filtered_df['Ticker'].isin(selected_tickers)]
+                st.dataframe(display_df.style.background_gradient(subset=['Change %', 'ROE (%)'], cmap='RdYlGn'))
+            else:
+                st.info("No companies selected to display.")
         else:
             st.info("No stocks match the current filters.")
     else:
@@ -125,6 +198,24 @@ if tickers:
     selected_stock = st.selectbox("Company Deep Dive", tickers)
     if selected_stock:
         s_obj = yf.Ticker(selected_stock)
-        t1, t2 = st.tabs(["Income Statement", "Balance Sheet"])
-        with t1: st.dataframe(s_obj.income_stmt)
-        with t2: st.dataframe(s_obj.balance_sheet)
+        
+        # Get financial statements and format to Crores
+        income_stmt = s_obj.income_stmt
+        balance_sheet = s_obj.balance_sheet
+        cash_flow = s_obj.cashflow
+        
+        # Format data to Crores
+        income_stmt_cr = format_financials_to_crores(income_stmt)
+        balance_sheet_cr = format_financials_to_crores(balance_sheet)
+        cash_flow_cr = format_financials_to_crores(cash_flow)
+        
+        t1, t2, t3 = st.tabs(["Income Statement", "Balance Sheet", "Cash Flow"])
+        with t1: 
+            st.caption("Values in Crores (₹)")
+            st.dataframe(income_stmt_cr)
+        with t2: 
+            st.caption("Values in Crores (₹)")
+            st.dataframe(balance_sheet_cr)
+        with t3:
+            st.caption("Values in Crores (₹)")
+            st.dataframe(cash_flow_cr)
